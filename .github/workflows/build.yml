@@ -8,26 +8,59 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+
+      # ---------------------------------------------------------
+      # CHECKOUT
+      # ---------------------------------------------------------
+
       - name: Checkout Templar
         uses: actions/checkout@v4
         with:
           ref: Templar-LinuxStable
           fetch-depth: 1
 
+
+      # ---------------------------------------------------------
+      # DEPENDENCIES
+      # ---------------------------------------------------------
+
       - name: Install dependencies
         run: |
+          set -e
+
           sudo apt update
+
           sudo apt install -y \
-            bc bison flex \
-            libssl-dev libelf-dev \
-            pahole cpio lz4 gzip \
-            zip unzip rsync git curl wget \
-            python3
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            pahole \
+            cpio \
+            lz4 \
+            gzip \
+            zip \
+            unzip \
+            rsync \
+            git \
+            curl \
+            wget \
+            python3 \
+            ca-certificates
+
+
+      # ---------------------------------------------------------
+      # LLVM 22
+      # ---------------------------------------------------------
 
       - name: Install LLVM 22
         run: |
+          set -e
+
           wget -q https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
+
           sudo ./llvm.sh 22
 
           sudo apt install -y \
@@ -37,17 +70,32 @@ jobs:
 
           echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
 
+          echo "===== TOOLCHAIN ====="
+          clang --version
+          ld.lld --version
+
+
       # ---------------------------------------------------------
-      # KernelSU
+      # KERNELSU
       # ---------------------------------------------------------
 
       - name: Install KernelSU
         run: |
+          set -e
+
           echo "Installing KernelSU..."
 
           curl -LSs \
             "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" \
             | bash -
+
+          echo
+          echo "===== KERNELSU ====="
+
+          if [ -d KernelSU ]; then
+            git -C KernelSU log -1 --oneline || true
+          fi
+
 
       # ---------------------------------------------------------
       # SUSFS
@@ -55,50 +103,92 @@ jobs:
 
       - name: Clone SUSFS
         run: |
+          set -e
+
+          SUSFS_BRANCH="gki-android12-5.10"
+
+          echo "========================================"
+          echo "Cloning SUSFS"
+          echo "Branch: $SUSFS_BRANCH"
+          echo "========================================"
+
           git clone \
             --depth=1 \
+            --branch "$SUSFS_BRANCH" \
             https://github.com/deepongi-labs/susfs4ksu.git \
             susfs
 
-          echo "SUSFS:"
+          echo
+          echo "===== SUSFS COMMIT ====="
           git -C susfs log -1 --oneline
 
-      - name: Apply SUSFS
-        run: |
-          set -e
+          echo
+          echo "===== SUSFS BRANCH ====="
+          git -C susfs branch --show-current
 
-          echo "Searching SUSFS 5.10 patches..."
-
+          echo
+          echo "===== SUSFS PATCH FILES ====="
           find susfs/kernel_patches \
             -maxdepth 3 \
             -type f \
             | sort
 
+
+      # ---------------------------------------------------------
+      # APPLY SUSFS
+      # ---------------------------------------------------------
+
+      - name: Apply SUSFS
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "Searching SUSFS 5.10 patches..."
+          echo "========================================"
+
           PATCH_KSU=$(find susfs/kernel_patches/KernelSU \
             -type f \
             -name '*enable_susfs*' \
+            | sort \
             | head -1)
 
           PATCH_KERNEL=$(find susfs/kernel_patches \
             -type f \
-            -name '50_add_susfs_in_kernel*5.10*.patch' \
+            -name '*5.10*.patch' \
+            | sort \
             | head -1)
 
+          echo
+          echo "===== SELECTED PATCHES ====="
+
+          echo "KSU:"
+          echo "${PATCH_KSU:-NOT FOUND}"
+
+          echo
+          echo "Kernel:"
+          echo "${PATCH_KERNEL:-NOT FOUND}"
+
           if [ -z "$PATCH_KSU" ]; then
+            echo
             echo "ERROR: KernelSU SUSFS patch not found"
             exit 1
           fi
 
           if [ -z "$PATCH_KERNEL" ]; then
+            echo
             echo "ERROR: Kernel 5.10 SUSFS patch not found"
+            echo
+            echo "Available patches:"
+            find susfs/kernel_patches \
+              -type f \
+              | sort
             exit 1
           fi
 
-          echo "KSU SUSFS patch:"
-          echo "$PATCH_KSU"
-
-          echo "Kernel SUSFS patch:"
-          echo "$PATCH_KERNEL"
+          echo
+          echo "========================================"
+          echo "Copying SUSFS files..."
+          echo "========================================"
 
           cp "$PATCH_KSU" KernelSU/
 
@@ -106,38 +196,74 @@ jobs:
 
           cp susfs/kernel_patches/include/linux/* include/linux/
 
+          echo
+          echo "========================================"
+          echo "Patching KernelSU..."
+          echo "========================================"
+
           cd KernelSU
 
           patch -p1 < "$(basename "$PATCH_KSU")"
 
           cd ..
 
+          echo
+          echo "========================================"
+          echo "Patching kernel..."
+          echo "========================================"
+
           patch -p1 < "$PATCH_KERNEL"
 
+          echo
+          echo "SUSFS patches applied successfully."
+
+
       # ---------------------------------------------------------
-      # Config
+      # CONFIG
       # ---------------------------------------------------------
 
       - name: Configure kernel
         run: |
           set -e
 
+          echo "========================================"
+          echo "Configuring kernel..."
+          echo "========================================"
+
+          # -----------------------------------------------------
+          # Wi-Fi
+          # -----------------------------------------------------
+
           scripts/config --enable WIRELESS
           scripts/config --enable CFG80211
           scripts/config --enable MAC80211
           scripts/config --enable RFKILL
 
+          # -----------------------------------------------------
           # KernelSU
+          # -----------------------------------------------------
+
           scripts/config --enable KSU
 
+          # -----------------------------------------------------
           # SUSFS
+          # -----------------------------------------------------
+
           scripts/config --enable KSU_SUSFS
 
+          # -----------------------------------------------------
           # ThinLTO
+          # -----------------------------------------------------
+
           scripts/config --enable LTO
           scripts/config --enable LTO_CLANG
           scripts/config --enable LTO_CLANG_THIN
           scripts/config --disable LTO_CLANG_FULL
+          scripts/config --disable LTO_NONE
+
+          # -----------------------------------------------------
+          # Generate final configuration
+          # -----------------------------------------------------
 
           make \
             ARCH=arm64 \
@@ -146,19 +272,44 @@ jobs:
             olddefconfig
 
           echo
-          echo "===== FINAL CONFIG ====="
+          echo "========================================"
+          echo "FINAL CONFIG"
+          echo "========================================"
 
           grep -E \
           '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL|KSU|KSU_SUSFS|LTO|LTO_CLANG|LTO_CLANG_THIN|LTO_CLANG_FULL)=' \
-          .config
+          .config || true
+
+          echo
+          echo "========================================"
+          echo "VERIFY REQUIRED CONFIG"
+          echo "========================================"
+
+          test "$(scripts/config --state WIRELESS)" = "y"
+          test "$(scripts/config --state CFG80211)" = "y"
+          test "$(scripts/config --state MAC80211)" = "y"
+          test "$(scripts/config --state RFKILL)" = "y"
+          test "$(scripts/config --state KSU)" = "y"
+          test "$(scripts/config --state KSU_SUSFS)" = "y"
+          test "$(scripts/config --state LTO)" = "y"
+          test "$(scripts/config --state LTO_CLANG)" = "y"
+          test "$(scripts/config --state LTO_CLANG_THIN)" = "y"
+
+          echo
+          echo "CONFIG CHECK PASSED."
+
 
       # ---------------------------------------------------------
-      # Build
+      # BUILD
       # ---------------------------------------------------------
 
       - name: Build kernel
         run: |
           set -e
+
+          echo "========================================"
+          echo "BUILDING TEMPLAR KERNEL"
+          echo "========================================"
 
           make \
             ARCH=arm64 \
@@ -170,17 +321,52 @@ jobs:
             -j"$(nproc)" \
             Image
 
-      - name: Verify kernel
-        run: |
-          file arch/arm64/boot/Image
-          ls -lh arch/arm64/boot/Image
+          echo
+          echo "========================================"
+          echo "BUILD FINISHED"
+          echo "========================================"
+
 
       # ---------------------------------------------------------
-      # Upload
+      # VERIFY
+      # ---------------------------------------------------------
+
+      - name: Verify kernel
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "VERIFYING KERNEL"
+          echo "========================================"
+
+          test -f arch/arm64/boot/Image
+
+          echo
+          echo "===== FILE ====="
+
+          file arch/arm64/boot/Image
+
+          echo
+          echo "===== SIZE ====="
+
+          ls -lh arch/arm64/boot/Image
+
+          echo
+          echo "===== KERNEL VERSION ====="
+
+          strings arch/arm64/boot/Image \
+            | grep -m1 \
+            -E 'Linux version 5\.10\.' \
+            || true
+
+
+      # ---------------------------------------------------------
+      # ARTIFACT
       # ---------------------------------------------------------
 
       - name: Upload kernel Image
         uses: actions/upload-artifact@v4
         with:
-          name: Templar-5.10.269-KSU-SUSFS-Image
+          name: Templar-5.10-KSU-SUSFS-ThinLTO
           path: arch/arm64/boot/Image
+          if-no-files-found: error
