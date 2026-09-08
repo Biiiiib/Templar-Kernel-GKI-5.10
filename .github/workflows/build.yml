@@ -29,10 +29,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "========================================"
-          echo "INSTALLING DEPENDENCIES"
-          echo "========================================"
-
           sudo apt update
 
           sudo apt install -y \
@@ -53,7 +49,8 @@ jobs:
             wget \
             python3 \
             ca-certificates \
-            file
+            file \
+            perl
 
 
       # =========================================================
@@ -133,11 +130,6 @@ jobs:
             "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" \
             | bash -
 
-          echo
-          echo "========================================"
-          echo "PINNING KERNELSU v3.3.0"
-          echo "========================================"
-
           cd KernelSU
 
           git fetch --tags --force
@@ -147,46 +139,53 @@ jobs:
           cd ..
 
           echo
-          echo "===== KERNELSU ====="
+          echo "========================================"
+          echo "KERNELSU INFORMATION"
+          echo "========================================"
 
-          git -C KernelSU log -1 --oneline
+          echo "TAG:"
+          git -C KernelSU describe --tags --always
 
           echo
-          echo "===== COMMIT ====="
-
+          echo "COMMIT:"
           git -C KernelSU rev-parse HEAD
 
           echo
-          echo "===== TAG ====="
-
-          git -C KernelSU describe --tags --always
+          echo "HEAD:"
+          git -C KernelSU log -1 --oneline
 
           echo
           echo "KernelSU v3.3.0 ready."
 
 
       # =========================================================
-      # CLONE SUSFS
+      # CLONE OFFICIAL SUSFS
       # =========================================================
 
-      - name: Clone SUSFS
+      - name: Setup SUSFS
         shell: bash
         run: |
           set -euo pipefail
 
           SUSFS_BRANCH="gki-android12-5.10"
+          SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
 
           echo "========================================"
-          echo "CLONING SUSFS"
+          echo "CLONING OFFICIAL SUSFS"
           echo "========================================"
 
-          echo "Branch: $SUSFS_BRANCH"
+          echo "Repository:"
+          echo "$SUSFS_REPO"
+
+          echo
+          echo "Branch:"
+          echo "$SUSFS_BRANCH"
 
           git clone \
             --depth=1 \
             --branch "$SUSFS_BRANCH" \
-            https://github.com/deepongi-labs/susfs4ksu.git \
-            susfs
+            "$SUSFS_REPO" \
+            susfs4ksu
 
           echo
           echo "========================================"
@@ -194,93 +193,61 @@ jobs:
           echo "========================================"
 
           echo
-          echo "===== COMMIT ====="
-
-          git -C susfs rev-parse HEAD
-
-          echo
-          echo "===== LOG ====="
-
-          git -C susfs log -1 --oneline
+          echo "COMMIT:"
+          git -C susfs4ksu rev-parse HEAD
 
           echo
-          echo "===== BRANCH ====="
-
-          git -C susfs branch --show-current
+          echo "HEAD:"
+          git -C susfs4ksu log -1 --oneline
 
           echo
-          echo "===== TAG ====="
-
-          git -C susfs describe --tags --always || true
+          echo "BRANCH:"
+          git -C susfs4ksu branch --show-current
 
           echo
           echo "========================================"
-          echo "SUSFS PATCH FILES"
+          echo "SUSFS PATCHES"
           echo "========================================"
 
-          find susfs/kernel_patches \
+          find susfs4ksu/kernel_patches \
             -type f \
             | sort
 
 
       # =========================================================
-      # VERIFY KSU + SUSFS PAIR
+      # VERIFY SUSFS FILES
       # =========================================================
 
-      - name: Verify KernelSU SUSFS pair
+      - name: Verify SUSFS files
         shell: bash
         run: |
           set -euo pipefail
 
           echo "========================================"
-          echo "VERIFYING KSU + SUSFS"
+          echo "VERIFYING SUSFS FILES"
           echo "========================================"
 
-          KSU_COMMIT="$(git -C KernelSU rev-parse HEAD)"
-          KSU_TAG="$(git -C KernelSU describe --tags --exact-match 2>/dev/null || true)"
+          KSU_PATCH="susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
-          SUSFS_COMMIT="$(git -C susfs rev-parse HEAD)"
+          KERNEL_PATCH="susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch"
 
-          echo
-          echo "KernelSU:"
-          echo "  Tag    : ${KSU_TAG:-unknown}"
-          echo "  Commit : $KSU_COMMIT"
+          test -f "$KSU_PATCH"
+          test -f "$KERNEL_PATCH"
 
           echo
-          echo "SUSFS:"
-          echo "  Commit : $SUSFS_COMMIT"
+          echo "KernelSU patch:"
+          echo "$KSU_PATCH"
 
           echo
-          echo "========================================"
-          echo "CHECKING REQUIRED PATCHES"
-          echo "========================================"
-
-          test -f \
-            susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
-
-          test -f \
-            susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch
+          echo "Kernel patch:"
+          echo "$KERNEL_PATCH"
 
           echo
-          echo "Required SUSFS patches found."
-
-          echo
-          echo "========================================"
-          echo "PATCH TARGETS"
-          echo "========================================"
-
-          grep '^diff --git' \
-            susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch \
-            | head -50
-
-          echo
-          grep '^diff --git' \
-            susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch \
-            | head -50
+          echo "Required SUSFS files exist."
 
 
       # =========================================================
-      # COPY SUSFS FILES
+      # COPY SUSFS SOURCES
       # =========================================================
 
       - name: Copy SUSFS sources
@@ -289,20 +256,25 @@ jobs:
           set -euo pipefail
 
           echo "========================================"
-          echo "COPYING SUSFS SOURCE FILES"
+          echo "COPYING SUSFS SOURCES"
           echo "========================================"
 
-          cp \
-            susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch \
-            KernelSU/
-
+          # Kernel SUSFS source
           cp -fv \
-            susfs/kernel_patches/fs/* \
+            susfs4ksu/kernel_patches/fs/* \
             fs/
 
           cp -fv \
-            susfs/kernel_patches/include/linux/* \
+            susfs4ksu/kernel_patches/include/linux/* \
             include/linux/
+
+          # KernelSU SUSFS patch
+          cp -fv \
+            susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch \
+            KernelSU/
+
+          echo
+          echo "SUSFS sources copied."
 
 
       # =========================================================
@@ -333,7 +305,7 @@ jobs:
 
 
       # =========================================================
-      # APPLY KERNELSU PATCH
+      # APPLY KERNELSU SUSFS PATCH
       # =========================================================
 
       - name: Apply KernelSU SUSFS patch
@@ -355,7 +327,7 @@ jobs:
           cd ..
 
           echo
-          echo "KernelSU SUSFS patch applied."
+          echo "KernelSU SUSFS patch applied successfully."
 
 
       # =========================================================
@@ -371,14 +343,11 @@ jobs:
           echo "TESTING KERNEL SUSFS PATCH"
           echo "========================================"
 
-          test -f \
-            susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch
-
           patch \
             --batch \
             --dry-run \
             -p1 \
-            < susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch
+            < susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch
 
           echo
           echo "Kernel SUSFS dry-run PASSED."
@@ -400,10 +369,10 @@ jobs:
           patch \
             --batch \
             -p1 \
-            < susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch
+            < susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch
 
           echo
-          echo "Kernel SUSFS patch applied."
+          echo "Kernel SUSFS patch applied successfully."
 
 
       # =========================================================
@@ -441,6 +410,15 @@ jobs:
           # -----------------------------------------------------
 
           scripts/config --enable KSU_SUSFS
+          scripts/config --enable KSU_SUSFS_SUS_PATH
+          scripts/config --enable KSU_SUSFS_SUS_MOUNT
+          scripts/config --enable KSU_SUSFS_SUS_KSTAT
+          scripts/config --enable KSU_SUSFS_SPOOF_UNAME
+          scripts/config --enable KSU_SUSFS_ENABLE_LOG
+          scripts/config --enable KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+          scripts/config --enable KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+          scripts/config --enable KSU_SUSFS_SUS_MAP
+          scripts/config --enable KSU_SUSFS_OPEN_REDIRECT
 
           # -----------------------------------------------------
           # ThinLTO
@@ -454,7 +432,7 @@ jobs:
           scripts/config --disable LTO_NONE
 
           # -----------------------------------------------------
-          # Generate config
+          # Generate final config
           # -----------------------------------------------------
 
           make \
@@ -469,12 +447,12 @@ jobs:
           echo "========================================"
 
           grep -E \
-            '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL|KSU|KSU_SUSFS|LTO|LTO_CLANG|LTO_CLANG_THIN|LTO_CLANG_FULL)=' \
+            '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL|KSU|KSU_SUSFS|KSU_SUSFS_|LTO|LTO_CLANG|LTO_CLANG_THIN|LTO_CLANG_FULL)=' \
             .config || true
 
           echo
           echo "========================================"
-          echo "VERIFY CONFIG"
+          echo "VERIFY REQUIRED CONFIG"
           echo "========================================"
 
           test "$(scripts/config --state WIRELESS)" = "y"
@@ -484,6 +462,16 @@ jobs:
 
           test "$(scripts/config --state KSU)" = "y"
           test "$(scripts/config --state KSU_SUSFS)" = "y"
+
+          test "$(scripts/config --state KSU_SUSFS_SUS_PATH)" = "y"
+          test "$(scripts/config --state KSU_SUSFS_SUS_MOUNT)" = "y"
+          test "$(scripts/config --state KSU_SUSFS_SUS_KSTAT)" = "y"
+          test "$(scripts/config --state KSU_SUSFS_SPOOF_UNAME)" = "y"
+          test "$(scripts/config --state KSU_SUSFS_ENABLE_LOG)" = "y"
+          test "$(scripts/config --state KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS)" = "y"
+          test "$(scripts/config --state KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG)" = "y"
+          test "$(scripts/config --state KSU_SUSFS_SUS_MAP)" = "y"
+          test "$(scripts/config --state KSU_SUSFS_OPEN_REDIRECT)" = "y"
 
           test "$(scripts/config --state LTO)" = "y"
           test "$(scripts/config --state LTO_CLANG)" = "y"
@@ -523,7 +511,9 @@ jobs:
           ld.lld --version
 
           echo
-          echo "===== BUILD ====="
+          echo "========================================"
+          echo "MAKE"
+          echo "========================================"
 
           make \
             ARCH=arm64 \
@@ -542,7 +532,7 @@ jobs:
 
 
       # =========================================================
-      # VERIFY IMAGE
+      # VERIFY
       # =========================================================
 
       - name: Verify kernel
@@ -567,7 +557,7 @@ jobs:
           ls -lh arch/arm64/boot/Image
 
           echo
-          echo "===== VERSION ====="
+          echo "===== KERNEL VERSION ====="
 
           strings arch/arm64/boot/Image \
             | grep -m1 \
