@@ -1,0 +1,186 @@
+name: Build Templar KSU SUSFS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Templar
+        uses: actions/checkout@v4
+        with:
+          ref: Templar-LinuxStable
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison flex \
+            libssl-dev libelf-dev \
+            pahole cpio lz4 gzip \
+            zip unzip rsync git curl wget \
+            python3
+
+      - name: Install LLVM 22
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+
+          sudo apt install -y \
+            clang-22 \
+            lld-22 \
+            llvm-22
+
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+
+      # ---------------------------------------------------------
+      # KernelSU
+      # ---------------------------------------------------------
+
+      - name: Install KernelSU
+        run: |
+          echo "Installing KernelSU..."
+
+          curl -LSs \
+            "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" \
+            | bash -
+
+      # ---------------------------------------------------------
+      # SUSFS
+      # ---------------------------------------------------------
+
+      - name: Clone SUSFS
+        run: |
+          git clone \
+            --depth=1 \
+            https://github.com/deepongi-labs/susfs4ksu.git \
+            susfs
+
+          echo "SUSFS:"
+          git -C susfs log -1 --oneline
+
+      - name: Apply SUSFS
+        run: |
+          set -e
+
+          echo "Searching SUSFS 5.10 patches..."
+
+          find susfs/kernel_patches \
+            -maxdepth 3 \
+            -type f \
+            | sort
+
+          PATCH_KSU=$(find susfs/kernel_patches/KernelSU \
+            -type f \
+            -name '*enable_susfs*' \
+            | head -1)
+
+          PATCH_KERNEL=$(find susfs/kernel_patches \
+            -type f \
+            -name '50_add_susfs_in_kernel*5.10*.patch' \
+            | head -1)
+
+          if [ -z "$PATCH_KSU" ]; then
+            echo "ERROR: KernelSU SUSFS patch not found"
+            exit 1
+          fi
+
+          if [ -z "$PATCH_KERNEL" ]; then
+            echo "ERROR: Kernel 5.10 SUSFS patch not found"
+            exit 1
+          fi
+
+          echo "KSU SUSFS patch:"
+          echo "$PATCH_KSU"
+
+          echo "Kernel SUSFS patch:"
+          echo "$PATCH_KERNEL"
+
+          cp "$PATCH_KSU" KernelSU/
+
+          cp susfs/kernel_patches/fs/* fs/
+
+          cp susfs/kernel_patches/include/linux/* include/linux/
+
+          cd KernelSU
+
+          patch -p1 < "$(basename "$PATCH_KSU")"
+
+          cd ..
+
+          patch -p1 < "$PATCH_KERNEL"
+
+      # ---------------------------------------------------------
+      # Config
+      # ---------------------------------------------------------
+
+      - name: Configure kernel
+        run: |
+          set -e
+
+          scripts/config --enable WIRELESS
+          scripts/config --enable CFG80211
+          scripts/config --enable MAC80211
+          scripts/config --enable RFKILL
+
+          # KernelSU
+          scripts/config --enable KSU
+
+          # SUSFS
+          scripts/config --enable KSU_SUSFS
+
+          # ThinLTO
+          scripts/config --enable LTO
+          scripts/config --enable LTO_CLANG
+          scripts/config --enable LTO_CLANG_THIN
+          scripts/config --disable LTO_CLANG_FULL
+
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            olddefconfig
+
+          echo
+          echo "===== FINAL CONFIG ====="
+
+          grep -E \
+          '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL|KSU|KSU_SUSFS|LTO|LTO_CLANG|LTO_CLANG_THIN|LTO_CLANG_FULL)=' \
+          .config
+
+      # ---------------------------------------------------------
+      # Build
+      # ---------------------------------------------------------
+
+      - name: Build kernel
+        run: |
+          set -e
+
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            LTO=thin \
+            CROSS_COMPILE= \
+            CROSS_COMPILE_COMPAT= \
+            -j"$(nproc)" \
+            Image
+
+      - name: Verify kernel
+        run: |
+          file arch/arm64/boot/Image
+          ls -lh arch/arm64/boot/Image
+
+      # ---------------------------------------------------------
+      # Upload
+      # ---------------------------------------------------------
+
+      - name: Upload kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Templar-5.10.269-KSU-SUSFS-Image
+          path: arch/arm64/boot/Image
