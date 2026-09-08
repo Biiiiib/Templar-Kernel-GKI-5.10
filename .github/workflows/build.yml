@@ -175,26 +175,18 @@ jobs:
           set -euo pipefail
 
           SUSFS_BRANCH="gki-android12-5.10"
-          SUSFS_REF="ec785f4"
 
           echo "========================================"
           echo "CLONING SUSFS"
           echo "========================================"
 
-          echo "Branch : $SUSFS_BRANCH"
-          echo "Commit : $SUSFS_REF"
+          echo "Branch: $SUSFS_BRANCH"
 
           git clone \
+            --depth=1 \
+            --branch "$SUSFS_BRANCH" \
             https://github.com/deepongi-labs/susfs4ksu.git \
             susfs
-
-          cd susfs
-
-          git fetch --depth=1 origin "$SUSFS_REF"
-
-          git checkout --detach "$SUSFS_REF"
-
-          cd ..
 
           echo
           echo "========================================"
@@ -214,7 +206,12 @@ jobs:
           echo
           echo "===== BRANCH ====="
 
-          git -C susfs branch --show-current || true
+          git -C susfs branch --show-current
+
+          echo
+          echo "===== TAG ====="
+
+          git -C susfs describe --tags --always || true
 
           echo
           echo "========================================"
