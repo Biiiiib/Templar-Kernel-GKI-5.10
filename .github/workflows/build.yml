@@ -9,9 +9,9 @@ jobs:
 
     steps:
 
-      # ---------------------------------------------------------
+      # =========================================================
       # CHECKOUT
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Checkout Templar
         uses: actions/checkout@v4
@@ -20,13 +20,13 @@ jobs:
           fetch-depth: 1
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # DEPENDENCIES
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Install dependencies
         run: |
-          set -e
+          set -euo pipefail
 
           sudo apt update
 
@@ -47,70 +47,107 @@ jobs:
             curl \
             wget \
             python3 \
-            ca-certificates
+            ca-certificates \
+            file
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # LLVM 22
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Install LLVM 22
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
+
+          echo "========================================"
+          echo "INSTALLING LLVM 22"
+          echo "========================================"
 
           wget -q https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
 
           sudo ./llvm.sh 22
 
-          sudo apt install -y \
-            clang-22 \
-            lld-22 \
-            llvm-22
+          # llvm.sh installs the versioned binaries.
+          # Put LLVM 22 FIRST for this step.
+          export PATH="/usr/lib/llvm-22/bin:$PATH"
 
+          # Also expose it to every following GitHub Actions step.
           echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
 
-          echo "===== TOOLCHAIN ====="
+          echo
+          echo "===== LLVM VERSION ====="
+
+          command -v clang
+          command -v ld.lld
+          command -v llvm-ar
+          command -v llvm-nm
+          command -v llvm-objcopy
+          command -v llvm-strip
+
+          echo
           clang --version
+          echo
           ld.lld --version
+          echo
+          llvm-ar --version | head -n 1
+          llvm-nm --version | head -n 1
+
+          echo
+          echo "LLVM 22 CHECK PASSED."
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # KERNELSU
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Install KernelSU
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "Installing KernelSU..."
+          echo "========================================"
+          echo "INSTALLING KERNELSU"
+          echo "========================================"
 
-          curl -LSs \
+          curl --fail --location --silent --show-error \
             "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" \
             | bash -
 
           echo
-          echo "===== KERNELSU ====="
+          echo "===== KERNELSU STATUS ====="
 
-          if [ -d KernelSU ]; then
-            git -C KernelSU log -1 --oneline || true
-          fi
+          test -d KernelSU
+
+          echo
+          echo "KernelSU HEAD:"
+          git -C KernelSU log -1 --oneline
+
+          echo
+          echo "KernelSU VERSION:"
+          git -C KernelSU describe --tags --always || true
+
+          echo
+          echo "KernelSU installed."
 
 
-      # ---------------------------------------------------------
-      # SUSFS
-      # ---------------------------------------------------------
+      # =========================================================
+      # CLONE SUSFS
+      # =========================================================
 
       - name: Clone SUSFS
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           SUSFS_BRANCH="gki-android12-5.10"
 
           echo "========================================"
-          echo "Cloning SUSFS"
-          echo "Branch: $SUSFS_BRANCH"
+          echo "CLONING SUSFS"
           echo "========================================"
+
+          echo "Branch: $SUSFS_BRANCH"
 
           git clone \
             --depth=1 \
@@ -127,111 +164,161 @@ jobs:
           git -C susfs branch --show-current
 
           echo
-          echo "===== SUSFS PATCH FILES ====="
+          echo "===== SUSFS FILES ====="
+
           find susfs/kernel_patches \
-            -maxdepth 3 \
             -type f \
             | sort
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # APPLY SUSFS
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Apply SUSFS
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           echo "========================================"
-          echo "Searching SUSFS 5.10 patches..."
+          echo "PREPARING SUSFS"
           echo "========================================"
-
-          PATCH_KSU=$(find susfs/kernel_patches/KernelSU \
-            -type f \
-            -name '*enable_susfs*' \
-            | sort \
-            | head -1)
-
-          PATCH_KERNEL=$(find susfs/kernel_patches \
-            -type f \
-            -name '*5.10*.patch' \
-            | sort \
-            | head -1)
 
           echo
-          echo "===== SELECTED PATCHES ====="
+          echo "===== PATCH FILES ====="
 
-          echo "KSU:"
+          find susfs/kernel_patches \
+            -type f \
+            | sort
+
+          # -----------------------------------------------------
+          # Find KernelSU patch
+          # -----------------------------------------------------
+
+          PATCH_KSU="$(
+            find susfs/kernel_patches/KernelSU \
+              -type f \
+              -name '10_enable_susfs_for_ksu.patch' \
+              | sort \
+              | head -n 1
+          )"
+
+          # -----------------------------------------------------
+          # Find kernel 5.10 patch
+          # -----------------------------------------------------
+
+          PATCH_KERNEL="$(
+            find susfs/kernel_patches \
+              -type f \
+              \( \
+                -name '50_add_susfs_in_kernel-5.10*.patch' \
+                -o \
+                -name '*5.10*.patch' \
+              \) \
+              | sort \
+              | head -n 1
+          )"
+
+          echo
+          echo "========================================"
+          echo "SELECTED PATCHES"
+          echo "========================================"
+
+          echo
+          echo "KernelSU patch:"
           echo "${PATCH_KSU:-NOT FOUND}"
 
           echo
-          echo "Kernel:"
+          echo "Kernel patch:"
           echo "${PATCH_KERNEL:-NOT FOUND}"
+
+          # -----------------------------------------------------
+          # Validate
+          # -----------------------------------------------------
 
           if [ -z "$PATCH_KSU" ]; then
             echo
-            echo "ERROR: KernelSU SUSFS patch not found"
+            echo "ERROR: SUSFS KernelSU patch not found."
             exit 1
           fi
 
           if [ -z "$PATCH_KERNEL" ]; then
             echo
-            echo "ERROR: Kernel 5.10 SUSFS patch not found"
-            echo
-            echo "Available patches:"
-            find susfs/kernel_patches \
-              -type f \
-              | sort
+            echo "ERROR: SUSFS 5.10 kernel patch not found."
             exit 1
           fi
 
+          # -----------------------------------------------------
+          # Check patch paths
+          # -----------------------------------------------------
+
+          test -f "$PATCH_KSU"
+          test -f "$PATCH_KERNEL"
+
           echo
           echo "========================================"
-          echo "Copying SUSFS files..."
+          echo "COPYING SUSFS SOURCES"
           echo "========================================"
 
           cp "$PATCH_KSU" KernelSU/
 
-          cp susfs/kernel_patches/fs/* fs/
+          cp -fv \
+            susfs/kernel_patches/fs/* \
+            fs/
 
-          cp susfs/kernel_patches/include/linux/* include/linux/
+          cp -fv \
+            susfs/kernel_patches/include/linux/* \
+            include/linux/
 
           echo
           echo "========================================"
-          echo "Patching KernelSU..."
+          echo "PATCHING KERNELSU"
           echo "========================================"
 
           cd KernelSU
 
-          patch -p1 < "$(basename "$PATCH_KSU")"
+          patch \
+            --forward \
+            --batch \
+            -p1 \
+            < "$(basename "$PATCH_KSU")"
 
           cd ..
 
           echo
           echo "========================================"
-          echo "Patching kernel..."
+          echo "PATCHING KERNEL"
           echo "========================================"
 
-          patch -p1 < "$PATCH_KERNEL"
+          patch \
+            --forward \
+            --batch \
+            -p1 \
+            < "$PATCH_KERNEL"
 
           echo
-          echo "SUSFS patches applied successfully."
+          echo "========================================"
+          echo "SUSFS PATCH SUCCESS"
+          echo "========================================"
 
 
-      # ---------------------------------------------------------
-      # CONFIG
-      # ---------------------------------------------------------
+      # =========================================================
+      # CONFIGURE KERNEL
+      # =========================================================
 
       - name: Configure kernel
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
+
+          export PATH="/usr/lib/llvm-22/bin:$PATH"
 
           echo "========================================"
-          echo "Configuring kernel..."
+          echo "CONFIGURING KERNEL"
           echo "========================================"
 
           # -----------------------------------------------------
-          # Wi-Fi
+          # Wi-Fi framework
           # -----------------------------------------------------
 
           scripts/config --enable WIRELESS
@@ -262,7 +349,7 @@ jobs:
           scripts/config --disable LTO_NONE
 
           # -----------------------------------------------------
-          # Generate final configuration
+          # Generate config
           # -----------------------------------------------------
 
           make \
@@ -277,39 +364,57 @@ jobs:
           echo "========================================"
 
           grep -E \
-          '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL|KSU|KSU_SUSFS|LTO|LTO_CLANG|LTO_CLANG_THIN|LTO_CLANG_FULL)=' \
-          .config || true
+            '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL|KSU|KSU_SUSFS|LTO|LTO_CLANG|LTO_CLANG_THIN|LTO_CLANG_FULL)=' \
+            .config || true
 
           echo
           echo "========================================"
-          echo "VERIFY REQUIRED CONFIG"
+          echo "VERIFY CONFIG"
           echo "========================================"
 
           test "$(scripts/config --state WIRELESS)" = "y"
           test "$(scripts/config --state CFG80211)" = "y"
           test "$(scripts/config --state MAC80211)" = "y"
           test "$(scripts/config --state RFKILL)" = "y"
+
           test "$(scripts/config --state KSU)" = "y"
           test "$(scripts/config --state KSU_SUSFS)" = "y"
+
           test "$(scripts/config --state LTO)" = "y"
           test "$(scripts/config --state LTO_CLANG)" = "y"
           test "$(scripts/config --state LTO_CLANG_THIN)" = "y"
+
+          if [ "$(scripts/config --state LTO_CLANG_FULL)" = "y" ]; then
+            echo "ERROR: Full LTO is enabled."
+            exit 1
+          fi
 
           echo
           echo "CONFIG CHECK PASSED."
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # BUILD
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Build kernel
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
+
+          export PATH="/usr/lib/llvm-22/bin:$PATH"
 
           echo "========================================"
-          echo "BUILDING TEMPLAR KERNEL"
+          echo "BUILDING TEMPLAR"
           echo "========================================"
+
+          echo
+          echo "===== TOOLCHAIN ====="
+          clang --version
+          ld.lld --version
+
+          echo
+          echo "===== BUILD ====="
 
           make \
             ARCH=arm64 \
@@ -327,13 +432,14 @@ jobs:
           echo "========================================"
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # VERIFY
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Verify kernel
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           echo "========================================"
           echo "VERIFYING KERNEL"
@@ -359,10 +465,13 @@ jobs:
             -E 'Linux version 5\.10\.' \
             || true
 
+          echo
+          echo "KERNEL IMAGE VERIFIED."
 
-      # ---------------------------------------------------------
+
+      # =========================================================
       # ARTIFACT
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Upload kernel Image
         uses: actions/upload-artifact@v4
