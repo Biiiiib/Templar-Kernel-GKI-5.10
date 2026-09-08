@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Templar KSUN
+    name: Build Templar KSUN Dev
     runs-on: ubuntu-24.04
 
     env:
@@ -18,10 +18,10 @@ jobs:
     steps:
 
       # ============================================================
-      # CHECKOUT
+      # CHECKOUT TEMPLAR
       # ============================================================
 
-      - name: Checkout Templar
+      - name: Checkout Templar Kernel
         uses: actions/checkout@v4
         with:
           ref: Templar-LinuxStable
@@ -29,7 +29,7 @@ jobs:
           submodules: recursive
 
       # ============================================================
-      # DEPENDENCIES
+      # INSTALL DEPENDENCIES
       # ============================================================
 
       - name: Install Dependencies
@@ -73,6 +73,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "========================================"
+          echo "INSTALLING LLVM 22"
+          echo "========================================"
+
           wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s 22
 
           sudo apt-get install -y \
@@ -86,6 +90,7 @@ jobs:
 
           export PATH="/usr/lib/llvm-22/bin:${PATH}"
 
+          echo
           echo "========================================"
           echo "TOOLCHAIN"
           echo "========================================"
@@ -97,11 +102,13 @@ jobs:
           command -v llvm-objcopy
           command -v llvm-strip
 
+          echo
           clang --version
+          echo
           ld.lld --version
 
       # ============================================================
-      # KERNEL INFO
+      # KERNEL INFORMATION
       # ============================================================
 
       - name: Kernel Information
@@ -113,19 +120,25 @@ jobs:
           echo "KERNEL INFORMATION"
           echo "========================================"
 
+          echo
+          echo "Commit:"
           git rev-parse HEAD
+
+          echo
+          echo "Commit message:"
           git log -1 --oneline
 
           echo
+          echo "Kernel version:"
           grep -E \
             '^VERSION|^PATCHLEVEL|^SUBLEVEL|^EXTRAVERSION' \
             Makefile
 
       # ============================================================
-      # KERNELSU NEXT
+      # INSTALL KERNELSU NEXT DEV
       # ============================================================
 
-      - name: Install KernelSU Next
+      - name: Install KernelSU Next Dev
         shell: bash
         run: |
           set -euo pipefail
@@ -133,22 +146,41 @@ jobs:
           export PATH="/usr/lib/llvm-22/bin:${PATH}"
 
           echo "========================================"
-          echo "KERNELSU NEXT"
+          echo "INSTALLING KERNELSU NEXT DEV"
           echo "========================================"
 
-          curl --fail --location --proto '=https' -LSs \
+          curl -LSs \
             "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
-            | bash -s next
+            | bash -s dev
 
           echo
-          echo "KSU NEXT COMMIT:"
+          echo "========================================"
+          echo "KERNELSU NEXT INFORMATION"
+          echo "========================================"
+
+          if [ ! -d "KernelSU-Next" ]; then
+            echo "ERROR: KernelSU-Next directory not found"
+            exit 1
+          fi
+
+          echo
+          echo "KSU Next HEAD:"
           git -C KernelSU-Next rev-parse HEAD
 
           echo
+          echo "KSU Next commit:"
           git -C KernelSU-Next log -1 --oneline
 
+          echo
+          echo "KSU Next branch:"
+          git -C KernelSU-Next branch --show-current || true
+
+          echo
+          echo "KSU Next describe:"
+          git -C KernelSU-Next describe --tags --always || true
+
       # ============================================================
-      # VERIFY KERNELSU
+      # VERIFY KERNELSU INTEGRATION
       # ============================================================
 
       - name: Verify KernelSU Next
@@ -157,22 +189,28 @@ jobs:
           set -euo pipefail
 
           echo "========================================"
-          echo "VERIFY KERNELSU"
+          echo "VERIFYING KERNELSU NEXT"
           echo "========================================"
 
-          if [ ! -e drivers/kernelsu ]; then
+          if [ ! -e "drivers/kernelsu" ]; then
             echo "ERROR: drivers/kernelsu not found"
             exit 1
           fi
 
+          echo
+          echo "drivers/kernelsu:"
           ls -la drivers/kernelsu
 
           echo
-          echo "KernelSU path:"
+          echo "Resolved path:"
           readlink -f drivers/kernelsu
 
+          echo
+          echo "KernelSU source:"
+          ls -la KernelSU-Next/kernel | head -30
+
       # ============================================================
-      # DEFCONFIG
+      # GENERATE DEFCONFIG
       # ============================================================
 
       - name: Generate Defconfig
@@ -193,7 +231,7 @@ jobs:
             defconfig
 
       # ============================================================
-      # KERNEL CONFIG
+      # CONFIGURE KERNEL
       # ============================================================
 
       - name: Configure Kernel
@@ -211,11 +249,17 @@ jobs:
           # KERNELSU
           # --------------------------------------------------------
 
+          echo
+          echo "Enabling KernelSU..."
+
           ./scripts/config --enable CONFIG_KSU
 
           # --------------------------------------------------------
           # THINLTO
           # --------------------------------------------------------
+
+          echo
+          echo "Configuring ThinLTO..."
 
           ./scripts/config --enable CONFIG_LTO
           ./scripts/config --enable CONFIG_LTO_CLANG
@@ -226,24 +270,20 @@ jobs:
           # WIRELESS
           # --------------------------------------------------------
 
+          echo
+          echo "Configuring wireless..."
+
           ./scripts/config --enable CONFIG_WIRELESS
           ./scripts/config --enable CONFIG_CFG80211
           ./scripts/config --enable CONFIG_MAC80211
           ./scripts/config --enable CONFIG_RFKILL
 
           # --------------------------------------------------------
-          # DO NOT FORCE KPROBES
-          #
-          # Keep the configuration close to the working
-          # Templar configuration first.
-          # --------------------------------------------------------
-
-          ./scripts/config --disable CONFIG_KPROBES || true
-          ./scripts/config --disable CONFIG_KPROBE_EVENTS || true
-
-          # --------------------------------------------------------
           # NO SUSFS
           # --------------------------------------------------------
+
+          echo
+          echo "Disabling SUSFS..."
 
           ./scripts/config --disable CONFIG_KSU_SUSFS || true
           ./scripts/config --disable CONFIG_KSU_SUSFS_SUS_PATH || true
@@ -257,8 +297,22 @@ jobs:
           ./scripts/config --disable CONFIG_KSU_SUSFS_OPEN_REDIRECT || true
 
           # --------------------------------------------------------
+          # KPROBES
+          # --------------------------------------------------------
+          #
+          # Do NOT force KPROBES for this baseline build.
+          #
+          # --------------------------------------------------------
+
+          ./scripts/config --disable CONFIG_KPROBES || true
+          ./scripts/config --disable CONFIG_KPROBE_EVENTS || true
+
+          # --------------------------------------------------------
           # FINALIZE
           # --------------------------------------------------------
+
+          echo
+          echo "Finalizing configuration..."
 
           make \
             ARCH=arm64 \
@@ -267,48 +321,56 @@ jobs:
             olddefconfig
 
       # ============================================================
-      # SHOW CONFIG
+      # SHOW FINAL CONFIG
       # ============================================================
 
-      - name: Show Configuration
+      - name: Show Final Configuration
         shell: bash
         run: |
           set -euo pipefail
 
           echo "========================================"
-          echo "KERNELSU"
+          echo "FINAL CONFIGURATION"
           echo "========================================"
+
+          echo
+          echo "========== KERNELSU =========="
 
           grep '^CONFIG_KSU=' .config || true
 
           echo
-          echo "========================================"
-          echo "LTO"
-          echo "========================================"
+          echo "========== LTO =========="
 
           grep -E \
             '^CONFIG_(LTO|LTO_CLANG|LTO_CLANG_FULL|LTO_CLANG_THIN)=' \
             .config || true
 
           echo
-          echo "========================================"
-          echo "WIRELESS"
-          echo "========================================"
+          echo "========== WIRELESS =========="
 
           grep -E \
             '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL)=' \
             .config || true
 
           echo
-          echo "========================================"
-          echo "SUSFS"
-          echo "========================================"
+          echo "========== KPROBES =========="
 
-          grep '^CONFIG_KSU_SUSFS' .config || \
+          grep -E \
+            '^CONFIG_(KPROBES|KPROBE_EVENTS)=' \
+            .config || true
+
+          echo
+          echo "========== SUSFS =========="
+
+          if grep -q '^CONFIG_KSU_SUSFS=' .config; then
+            echo "WARNING: SUSFS CONFIG FOUND"
+            grep '^CONFIG_KSU_SUSFS' .config
+          else
             echo "SUSFS: DISABLED"
+          fi
 
       # ============================================================
-      # BUILD
+      # BUILD KERNEL
       # ============================================================
 
       - name: Build Kernel
@@ -322,11 +384,28 @@ jobs:
           echo "BUILDING TEMPLAR KERNEL"
           echo "========================================"
 
+          echo
+          echo "Compiler:"
           clang --version | head -n 1
+
+          echo
+          echo "Linker:"
           ld.lld --version | head -n 1
 
           echo
-          echo "Starting build..."
+          echo "CPU:"
+          nproc
+
+          echo
+          echo "Kernel version:"
+          grep -E \
+            '^VERSION|^PATCHLEVEL|^SUBLEVEL|^EXTRAVERSION' \
+            Makefile
+
+          echo
+          echo "========================================"
+          echo "MAKE IMAGE"
+          echo "========================================"
 
           make \
             ARCH=arm64 \
@@ -342,7 +421,7 @@ jobs:
       # VERIFY IMAGE
       # ============================================================
 
-      - name: Verify Image
+      - name: Verify Kernel Image
         shell: bash
         run: |
           set -euo pipefail
@@ -350,17 +429,20 @@ jobs:
           IMAGE="arch/arm64/boot/Image"
 
           echo "========================================"
-          echo "VERIFY IMAGE"
+          echo "VERIFYING KERNEL IMAGE"
           echo "========================================"
 
           if [ ! -f "$IMAGE" ]; then
-            echo "ERROR: Image not found"
+            echo "ERROR: Kernel Image not found"
             exit 1
           fi
 
+          echo
+          echo "Image:"
           ls -lh "$IMAGE"
 
           echo
+          echo "File:"
           file "$IMAGE"
 
           echo
@@ -368,7 +450,46 @@ jobs:
           strings "$IMAGE" | grep -m1 "Linux version" || true
 
       # ============================================================
-      # PACKAGE
+      # FINAL VERIFICATION
+      # ============================================================
+
+      - name: Final Verification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "FINAL VERIFICATION"
+          echo "========================================"
+
+          echo
+          echo "KernelSU:"
+          grep '^CONFIG_KSU=' .config || true
+
+          echo
+          echo "Wireless:"
+          grep -E \
+            '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL)=' \
+            .config || true
+
+          echo
+          echo "ThinLTO:"
+          grep -E \
+            '^CONFIG_(LTO|LTO_CLANG|LTO_CLANG_FULL|LTO_CLANG_THIN)=' \
+            .config || true
+
+          echo
+          echo "SUSFS:"
+          grep '^CONFIG_KSU_SUSFS' .config || \
+            echo "SUSFS: DISABLED"
+
+          echo
+          echo "========================================"
+          echo "BUILD COMPLETED SUCCESSFULLY"
+          echo "========================================"
+
+      # ============================================================
+      # PREPARE ARTIFACT
       # ============================================================
 
       - name: Prepare Artifact
@@ -386,23 +507,28 @@ jobs:
             .config \
             output/kernel.config
 
-          [ ! -f System.map ] || cp System.map output/System.map
-          [ ! -f Module.symvers ] || cp Module.symvers output/Module.symvers
+          if [ -f System.map ]; then
+            cp System.map output/System.map
+          fi
+
+          if [ -f Module.symvers ]; then
+            cp Module.symvers output/Module.symvers
+          fi
 
           echo "========================================"
-          echo "OUTPUT"
+          echo "OUTPUT FILES"
           echo "========================================"
 
           ls -lah output
 
       # ============================================================
-      # UPLOAD
+      # UPLOAD ARTIFACT
       # ============================================================
 
-      - name: Upload Kernel
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Templar-KernelSU-Next-5.10.269
+          name: Templar-KernelSU-Next-dev-5.10.269
           path: output/
           if-no-files-found: error
           retention-days: 14
