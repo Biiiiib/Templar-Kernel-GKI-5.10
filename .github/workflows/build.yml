@@ -13,16 +13,15 @@ jobs:
 
     env:
       ARCH: arm64
-      KERNEL_BRANCH: Templar-LinuxStable
       LLVM_PATH: /usr/lib/llvm-22/bin
 
     steps:
 
       # ============================================================
-      # CHECKOUT KERNEL
+      # CHECKOUT
       # ============================================================
 
-      - name: Checkout Templar Kernel
+      - name: Checkout Templar
         uses: actions/checkout@v4
         with:
           ref: Templar-LinuxStable
@@ -74,10 +73,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "========================================"
-          echo "INSTALLING LLVM 22"
-          echo "========================================"
-
           wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s 22
 
           sudo apt-get install -y \
@@ -91,9 +86,8 @@ jobs:
 
           export PATH="/usr/lib/llvm-22/bin:${PATH}"
 
-          echo
           echo "========================================"
-          echo "LLVM VERSION"
+          echo "TOOLCHAIN"
           echo "========================================"
 
           command -v clang
@@ -107,7 +101,7 @@ jobs:
           ld.lld --version
 
       # ============================================================
-      # KERNEL INFORMATION
+      # KERNEL INFO
       # ============================================================
 
       - name: Kernel Information
@@ -119,19 +113,16 @@ jobs:
           echo "KERNEL INFORMATION"
           echo "========================================"
 
-          echo "Commit:"
           git rev-parse HEAD
-
-          echo
-          echo "Commit:"
           git log -1 --oneline
 
           echo
-          echo "Kernel version:"
-          grep -E '^VERSION|^PATCHLEVEL|^SUBLEVEL|^EXTRAVERSION' Makefile
+          grep -E \
+            '^VERSION|^PATCHLEVEL|^SUBLEVEL|^EXTRAVERSION' \
+            Makefile
 
       # ============================================================
-      # INSTALL KERNELSU NEXT
+      # KERNELSU NEXT
       # ============================================================
 
       - name: Install KernelSU Next
@@ -142,7 +133,7 @@ jobs:
           export PATH="/usr/lib/llvm-22/bin:${PATH}"
 
           echo "========================================"
-          echo "INSTALLING KERNELSU NEXT"
+          echo "KERNELSU NEXT"
           echo "========================================"
 
           curl --fail --location --proto '=https' -LSs \
@@ -150,312 +141,59 @@ jobs:
             | bash -s next
 
           echo
-          echo "========================================"
-          echo "KERNELSU NEXT INFORMATION"
-          echo "========================================"
-
-          if [ ! -d "KernelSU-Next" ]; then
-            echo "ERROR: KernelSU-Next directory not found"
-            exit 1
-          fi
-
-          echo "KSU Next commit:"
+          echo "KSU NEXT COMMIT:"
           git -C KernelSU-Next rev-parse HEAD
 
           echo
-          echo "KSU Next:"
           git -C KernelSU-Next log -1 --oneline
 
-          echo
-          echo "KSU Next tag:"
-          git -C KernelSU-Next describe --tags --always || true
-
       # ============================================================
-      # VERIFY KSU INTEGRATION
+      # VERIFY KERNELSU
       # ============================================================
 
-      - name: Verify KernelSU Next Integration
+      - name: Verify KernelSU Next
         shell: bash
         run: |
           set -euo pipefail
 
           echo "========================================"
-          echo "VERIFYING KERNELSU NEXT"
+          echo "VERIFY KERNELSU"
           echo "========================================"
 
-          if [ ! -e "drivers/kernelsu" ]; then
-            echo "ERROR: drivers/kernelsu does not exist"
+          if [ ! -e drivers/kernelsu ]; then
+            echo "ERROR: drivers/kernelsu not found"
             exit 1
           fi
 
-          echo
-          echo "drivers/kernelsu:"
           ls -la drivers/kernelsu
 
           echo
-          echo "KernelSU source:"
-          readlink -f drivers/kernelsu || true
+          echo "KernelSU path:"
+          readlink -f drivers/kernelsu
 
       # ============================================================
-      # OPTIONAL SUSFS
-      #
-      # SUSFS IS OPTIONAL.
-      #
-      # 1. Clone official SUSFS
-      # 2. Test KSU patch
-      # 3. Test kernel patch
-      # 4. ONLY apply if both tests pass
-      # 5. If anything fails -> SUSFS skipped
+      # DEFCONFIG
       # ============================================================
 
-      - name: Try SUSFS
+      - name: Generate Defconfig
         shell: bash
         run: |
           set -euo pipefail
 
+          export PATH="/usr/lib/llvm-22/bin:${PATH}"
+
           echo "========================================"
-          echo "OPTIONAL SUSFS"
-          echo "========================================"
-
-          SUSFS_ENABLED=false
-
-          rm -rf susfs4ksu
-
-          # --------------------------------------------------------
-          # Clone SUSFS
-          # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "CLONING OFFICIAL SUSFS"
+          echo "GENERATING DEFCONFIG"
           echo "========================================"
 
-          if ! git clone \
-            --depth=1 \
-            --branch gki-android12-5.10 \
-            https://gitlab.com/simonpunk/susfs4ksu.git \
-            susfs4ksu; then
-
-            echo "WARNING: SUSFS clone failed."
-            echo "SUSFS will be skipped."
-
-            echo "SUSFS_ENABLED=false" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          echo
-          echo "SUSFS commit:"
-          git -C susfs4ksu rev-parse HEAD
-
-          echo
-          echo "SUSFS:"
-          git -C susfs4ksu log -1 --oneline
-
-          # --------------------------------------------------------
-          # Patch paths
-          # --------------------------------------------------------
-
-          KSU_PATCH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
-
-          KERNEL_PATCH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch"
-
-          # --------------------------------------------------------
-          # Verify files
-          # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "VERIFYING SUSFS FILES"
-          echo "========================================"
-
-          if [ ! -f "$KSU_PATCH" ]; then
-            echo "WARNING: KSU SUSFS patch missing."
-            echo "SUSFS will be skipped."
-
-            echo "SUSFS_ENABLED=false" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          if [ ! -f "$KERNEL_PATCH" ]; then
-            echo "WARNING: Kernel SUSFS patch missing."
-            echo "SUSFS will be skipped."
-
-            echo "SUSFS_ENABLED=false" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          echo "KSU patch:"
-          echo "$KSU_PATCH"
-
-          echo
-          echo "Kernel patch:"
-          echo "$KERNEL_PATCH"
-
-          # --------------------------------------------------------
-          # Verify source files
-          # --------------------------------------------------------
-
-          if [ ! -f \
-            "${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/fs/susfs.c" ]; then
-
-            echo "WARNING: susfs.c missing."
-            echo "SUSFS will be skipped."
-
-            echo "SUSFS_ENABLED=false" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          # --------------------------------------------------------
-          # TEST KSU PATCH
-          #
-          # IMPORTANT:
-          # --dry-run does NOT modify the source tree.
-          # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "TESTING KERNELSU SUSFS PATCH"
-          echo "========================================"
-
-          cd "${GITHUB_WORKSPACE}/KernelSU-Next"
-
-          if patch \
-            --dry-run \
-            -p1 \
-            --forward \
-            < "$KSU_PATCH" \
-            > /tmp/susfs_ksu_test.log 2>&1; then
-
-            echo
-            echo "KernelSU SUSFS patch:"
-            echo "COMPATIBLE"
-
-          else
-
-            echo
-            echo "KernelSU SUSFS patch:"
-            echo "NOT COMPATIBLE"
-
-            echo
-            echo "Patch output:"
-            cat /tmp/susfs_ksu_test.log
-
-            echo
-            echo "SUSFS skipped."
-
-            echo "SUSFS_ENABLED=false" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          # --------------------------------------------------------
-          # TEST KERNEL PATCH
-          #
-          # We test BEFORE applying anything.
-          # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "TESTING KERNEL SUSFS PATCH"
-          echo "========================================"
-
-          cd "${GITHUB_WORKSPACE}"
-
-          # Check whether patch can apply to this kernel.
-          if patch \
-            --dry-run \
-            -p1 \
-            --forward \
-            < "$KERNEL_PATCH" \
-            > /tmp/susfs_kernel_test.log 2>&1; then
-
-            echo
-            echo "Kernel SUSFS patch:"
-            echo "COMPATIBLE"
-
-          else
-
-            echo
-            echo "Kernel SUSFS patch:"
-            echo "NOT COMPATIBLE"
-
-            echo
-            echo "Patch output:"
-            cat /tmp/susfs_kernel_test.log
-
-            echo
-            echo "SUSFS skipped."
-
-            echo "SUSFS_ENABLED=false" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          # --------------------------------------------------------
-          # APPLY KSU PATCH
-          # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "APPLYING KERNELSU SUSFS PATCH"
-          echo "========================================"
-
-          cd "${GITHUB_WORKSPACE}/KernelSU-Next"
-
-          patch \
-            -p1 \
-            --forward \
-            < "$KSU_PATCH"
-
-          # --------------------------------------------------------
-          # COPY SUSFS SOURCE
-          # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "COPYING SUSFS SOURCES"
-          echo "========================================"
-
-          cd "${GITHUB_WORKSPACE}"
-
-          cp \
-            susfs4ksu/kernel_patches/fs/* \
-            fs/
-
-          cp \
-            susfs4ksu/kernel_patches/include/linux/* \
-            include/linux/
-
-          # --------------------------------------------------------
-          # APPLY KERNEL PATCH
-          # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "APPLYING KERNEL SUSFS PATCH"
-          echo "========================================"
-
-          patch \
-            -p1 \
-            --forward \
-            < "$KERNEL_PATCH"
-
-          # --------------------------------------------------------
-          # SUCCESS
-          # --------------------------------------------------------
-
-          SUSFS_ENABLED=true
-
-          echo "SUSFS_ENABLED=true" >> "$GITHUB_ENV"
-
-          echo
-          echo "========================================"
-          echo "SUSFS ENABLED"
-          echo "========================================"
-
-          echo "SUSFS commit:"
-          git -C susfs4ksu rev-parse HEAD
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            defconfig
 
       # ============================================================
-      # CONFIGURE KERNEL
+      # KERNEL CONFIG
       # ============================================================
 
       - name: Configure Kernel
@@ -470,56 +208,14 @@ jobs:
           echo "========================================"
 
           # --------------------------------------------------------
-          # DEFCONFIG
+          # KERNELSU
           # --------------------------------------------------------
-
-          make \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            defconfig
-
-          # --------------------------------------------------------
-          # KERNELSU NEXT
-          # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "KERNELSU NEXT CONFIG"
-          echo "========================================"
 
           ./scripts/config --enable CONFIG_KSU
 
           # --------------------------------------------------------
-          # KPROBES
-          # --------------------------------------------------------
-
-          ./scripts/config --enable CONFIG_KPROBES
-          ./scripts/config --enable CONFIG_HAVE_KPROBES
-          ./scripts/config --enable CONFIG_KPROBE_EVENTS
-
-          # --------------------------------------------------------
-          # WIFI
-          # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "WIRELESS CONFIG"
-          echo "========================================"
-
-          ./scripts/config --enable CONFIG_WIRELESS
-          ./scripts/config --enable CONFIG_CFG80211
-          ./scripts/config --enable CONFIG_MAC80211
-          ./scripts/config --enable CONFIG_RFKILL
-
-          # --------------------------------------------------------
           # THINLTO
           # --------------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "THINLTO CONFIG"
-          echo "========================================"
 
           ./scripts/config --enable CONFIG_LTO
           ./scripts/config --enable CONFIG_LTO_CLANG
@@ -527,58 +223,42 @@ jobs:
           ./scripts/config --enable CONFIG_LTO_CLANG_THIN
 
           # --------------------------------------------------------
-          # SUSFS CONFIG
-          # ONLY IF SUSFS PATCH WAS SUCCESSFUL
+          # WIRELESS
           # --------------------------------------------------------
 
-          echo
-          echo "========================================"
-          echo "SUSFS CONFIG"
-          echo "========================================"
-
-          if [ "${SUSFS_ENABLED:-false}" = "true" ]; then
-
-            echo "SUSFS was successfully applied."
-            echo "Enabling SUSFS configuration."
-
-            ./scripts/config --enable CONFIG_KSU_SUSFS
-            ./scripts/config --enable CONFIG_KSU_SUSFS_SUS_PATH
-            ./scripts/config --enable CONFIG_KSU_SUSFS_SUS_MOUNT
-            ./scripts/config --enable CONFIG_KSU_SUSFS_SUS_KSTAT
-            ./scripts/config --enable CONFIG_KSU_SUSFS_SPOOF_UNAME
-            ./scripts/config --enable CONFIG_KSU_SUSFS_ENABLE_LOG
-            ./scripts/config --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-            ./scripts/config --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-            ./scripts/config --enable CONFIG_KSU_SUSFS_SUS_MAP
-            ./scripts/config --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT
-
-          else
-
-            echo "SUSFS was skipped."
-            echo "Building KernelSU Next without SUSFS."
-
-            # Make absolutely sure no stale SUSFS config remains.
-            ./scripts/config --disable CONFIG_KSU_SUSFS || true
-            ./scripts/config --disable CONFIG_KSU_SUSFS_SUS_PATH || true
-            ./scripts/config --disable CONFIG_KSU_SUSFS_SUS_MOUNT || true
-            ./scripts/config --disable CONFIG_KSU_SUSFS_SUS_KSTAT || true
-            ./scripts/config --disable CONFIG_KSU_SUSFS_SPOOF_UNAME || true
-            ./scripts/config --disable CONFIG_KSU_SUSFS_ENABLE_LOG || true
-            ./scripts/config --disable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS || true
-            ./scripts/config --disable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG || true
-            ./scripts/config --disable CONFIG_KSU_SUSFS_SUS_MAP || true
-            ./scripts/config --disable CONFIG_KSU_SUSFS_OPEN_REDIRECT || true
-
-          fi
+          ./scripts/config --enable CONFIG_WIRELESS
+          ./scripts/config --enable CONFIG_CFG80211
+          ./scripts/config --enable CONFIG_MAC80211
+          ./scripts/config --enable CONFIG_RFKILL
 
           # --------------------------------------------------------
-          # FINALIZE CONFIG
+          # DO NOT FORCE KPROBES
+          #
+          # Keep the configuration close to the working
+          # Templar configuration first.
           # --------------------------------------------------------
 
-          echo
-          echo "========================================"
-          echo "FINALIZING CONFIG"
-          echo "========================================"
+          ./scripts/config --disable CONFIG_KPROBES || true
+          ./scripts/config --disable CONFIG_KPROBE_EVENTS || true
+
+          # --------------------------------------------------------
+          # NO SUSFS
+          # --------------------------------------------------------
+
+          ./scripts/config --disable CONFIG_KSU_SUSFS || true
+          ./scripts/config --disable CONFIG_KSU_SUSFS_SUS_PATH || true
+          ./scripts/config --disable CONFIG_KSU_SUSFS_SUS_MOUNT || true
+          ./scripts/config --disable CONFIG_KSU_SUSFS_SUS_KSTAT || true
+          ./scripts/config --disable CONFIG_KSU_SUSFS_SPOOF_UNAME || true
+          ./scripts/config --disable CONFIG_KSU_SUSFS_ENABLE_LOG || true
+          ./scripts/config --disable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS || true
+          ./scripts/config --disable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG || true
+          ./scripts/config --disable CONFIG_KSU_SUSFS_SUS_MAP || true
+          ./scripts/config --disable CONFIG_KSU_SUSFS_OPEN_REDIRECT || true
+
+          # --------------------------------------------------------
+          # FINALIZE
+          # --------------------------------------------------------
 
           make \
             ARCH=arm64 \
@@ -590,49 +270,45 @@ jobs:
       # SHOW CONFIG
       # ============================================================
 
-      - name: Show Final Configuration
+      - name: Show Configuration
         shell: bash
         run: |
           set -euo pipefail
 
           echo "========================================"
-          echo "FINAL KERNEL CONFIGURATION"
+          echo "KERNELSU"
           echo "========================================"
 
+          grep '^CONFIG_KSU=' .config || true
+
           echo
-          echo "========== KERNELSU =========="
+          echo "========================================"
+          echo "LTO"
+          echo "========================================"
 
           grep -E \
-            '^(CONFIG_KSU=|CONFIG_KPROBES=|CONFIG_HAVE_KPROBES=|CONFIG_KPROBE_EVENTS=)' \
+            '^CONFIG_(LTO|LTO_CLANG|LTO_CLANG_FULL|LTO_CLANG_THIN)=' \
             .config || true
 
           echo
-          echo "========== WIRELESS =========="
+          echo "========================================"
+          echo "WIRELESS"
+          echo "========================================"
 
           grep -E \
-            '^(CONFIG_WIRELESS=|CONFIG_CFG80211=|CONFIG_MAC80211=|CONFIG_RFKILL=)' \
+            '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL)=' \
             .config || true
 
           echo
-          echo "========== LTO =========="
-
-          grep -E \
-            '^(CONFIG_LTO=|CONFIG_LTO_CLANG=|CONFIG_LTO_CLANG_FULL=|CONFIG_LTO_CLANG_THIN=)' \
-            .config || true
-
-          echo
-          echo "========== SUSFS =========="
+          echo "========================================"
+          echo "SUSFS"
+          echo "========================================"
 
           grep '^CONFIG_KSU_SUSFS' .config || \
-            echo "SUSFS: NOT ENABLED"
-
-          echo
-          echo "========================================"
-          echo "SUSFS STATUS: ${SUSFS_ENABLED:-false}"
-          echo "========================================"
+            echo "SUSFS: DISABLED"
 
       # ============================================================
-      # BUILD KERNEL
+      # BUILD
       # ============================================================
 
       - name: Build Kernel
@@ -646,30 +322,11 @@ jobs:
           echo "BUILDING TEMPLAR KERNEL"
           echo "========================================"
 
-          echo
-          echo "Compiler:"
           clang --version | head -n 1
-
-          echo
-          echo "Linker:"
           ld.lld --version | head -n 1
 
           echo
-          echo "CPU:"
-          nproc
-
-          echo
-          echo "Kernel:"
-          grep -E '^VERSION|^PATCHLEVEL|^SUBLEVEL|^EXTRAVERSION' Makefile
-
-          echo
-          echo "SUSFS:"
-          echo "${SUSFS_ENABLED:-false}"
-
-          echo
-          echo "========================================"
-          echo "MAKE IMAGE"
-          echo "========================================"
+          echo "Starting build..."
 
           make \
             ARCH=arm64 \
@@ -685,28 +342,25 @@ jobs:
       # VERIFY IMAGE
       # ============================================================
 
-      - name: Verify Kernel Image
+      - name: Verify Image
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "========================================"
-          echo "VERIFYING KERNEL IMAGE"
-          echo "========================================"
-
           IMAGE="arch/arm64/boot/Image"
 
+          echo "========================================"
+          echo "VERIFY IMAGE"
+          echo "========================================"
+
           if [ ! -f "$IMAGE" ]; then
-            echo "ERROR: Image not found!"
+            echo "ERROR: Image not found"
             exit 1
           fi
 
-          echo
-          echo "Image:"
           ls -lh "$IMAGE"
 
           echo
-          echo "File:"
           file "$IMAGE"
 
           echo
@@ -714,56 +368,7 @@ jobs:
           strings "$IMAGE" | grep -m1 "Linux version" || true
 
       # ============================================================
-      # VERIFY KSU / SUSFS IN CONFIG
-      # ============================================================
-
-      - name: Final Verification
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "FINAL VERIFICATION"
-          echo "========================================"
-
-          echo
-          echo "KERNELSU:"
-          grep '^CONFIG_KSU=' .config || true
-
-          echo
-          echo "KPROBES:"
-          grep -E \
-            '^CONFIG_(KPROBES|HAVE_KPROBES|KPROBE_EVENTS)=' \
-            .config || true
-
-          echo
-          echo "WIRELESS:"
-          grep -E \
-            '^CONFIG_(WIRELESS|CFG80211|MAC80211|RFKILL)=' \
-            .config || true
-
-          echo
-          echo "THINLTO:"
-          grep -E \
-            '^CONFIG_(LTO|LTO_CLANG|LTO_CLANG_FULL|LTO_CLANG_THIN)=' \
-            .config || true
-
-          echo
-          echo "SUSFS STATUS:"
-          echo "${SUSFS_ENABLED:-false}"
-
-          echo
-          echo "SUSFS CONFIG:"
-          grep '^CONFIG_KSU_SUSFS' .config || \
-            echo "SUSFS CONFIG NOT PRESENT"
-
-          echo
-          echo "========================================"
-          echo "BUILD VERIFICATION COMPLETE"
-          echo "========================================"
-
-      # ============================================================
-      # PREPARE ARTIFACT
+      # PACKAGE
       # ============================================================
 
       - name: Prepare Artifact
@@ -781,25 +386,20 @@ jobs:
             .config \
             output/kernel.config
 
-          if [ -f System.map ]; then
-            cp System.map output/System.map
-          fi
-
-          if [ -f Module.symvers ]; then
-            cp Module.symvers output/Module.symvers
-          fi
+          [ ! -f System.map ] || cp System.map output/System.map
+          [ ! -f Module.symvers ] || cp Module.symvers output/Module.symvers
 
           echo "========================================"
-          echo "OUTPUT FILES"
+          echo "OUTPUT"
           echo "========================================"
 
           ls -lah output
 
       # ============================================================
-      # UPLOAD ARTIFACT
+      # UPLOAD
       # ============================================================
 
-      - name: Upload Kernel Artifact
+      - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
           name: Templar-KernelSU-Next-5.10.269
