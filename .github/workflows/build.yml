@@ -74,10 +74,8 @@ jobs:
 
           sudo ./llvm.sh 22
 
-          # Make LLVM 22 active in THIS step.
           export PATH="/usr/lib/llvm-22/bin:$PATH"
 
-          # Make LLVM 22 active in all FOLLOWING steps.
           echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
 
           echo
@@ -118,7 +116,7 @@ jobs:
       # KERNELSU
       # =========================================================
 
-      - name: Install KernelSU
+      - name: Install KernelSU v3.3.0
         shell: bash
         run: |
           set -euo pipefail
@@ -137,13 +135,19 @@ jobs:
 
           echo
           echo "========================================"
-          echo "KERNELSU INFORMATION"
+          echo "PINNING KERNELSU v3.3.0"
           echo "========================================"
 
-          test -d KernelSU
+          cd KernelSU
+
+          git fetch --tags --force
+
+          git checkout --detach v3.3.0
+
+          cd ..
 
           echo
-          echo "===== HEAD ====="
+          echo "===== KERNELSU ====="
 
           git -C KernelSU log -1 --oneline
 
@@ -155,42 +159,10 @@ jobs:
           echo
           echo "===== TAG ====="
 
-          git -C KernelSU describe --tags --always || true
+          git -C KernelSU describe --tags --always
 
           echo
-          echo "===== BRANCH ====="
-
-          git -C KernelSU branch -a || true
-
-          echo
-          echo "===== KERNELSU DIRECTORY ====="
-
-          find KernelSU/kernel \
-            -maxdepth 2 \
-            -type f \
-            | sort \
-            | head -150
-
-          echo
-          echo "========================================"
-          echo "CHECKING SUSFS TARGET FILES"
-          echo "========================================"
-
-          for f in \
-            KernelSU/kernel/selinux/rules.c \
-            KernelSU/kernel/selinux/selinux.c \
-            KernelSU/kernel/selinux/selinux.h \
-            KernelSU/kernel/setuid_hook.c \
-            KernelSU/kernel/sucompat.c \
-            KernelSU/kernel/sucompat.h \
-            KernelSU/kernel/supercalls.c
-          do
-            if [ -f "$f" ]; then
-              echo "FOUND   : $f"
-            else
-              echo "MISSING : $f"
-            fi
-          done
+          echo "KernelSU v3.3.0 ready."
 
 
       # =========================================================
@@ -203,18 +175,26 @@ jobs:
           set -euo pipefail
 
           SUSFS_BRANCH="gki-android12-5.10"
+          SUSFS_REF="ec785f4"
 
           echo "========================================"
           echo "CLONING SUSFS"
           echo "========================================"
 
-          echo "Branch: $SUSFS_BRANCH"
+          echo "Branch : $SUSFS_BRANCH"
+          echo "Commit : $SUSFS_REF"
 
           git clone \
-            --depth=1 \
-            --branch "$SUSFS_BRANCH" \
             https://github.com/deepongi-labs/susfs4ksu.git \
             susfs
+
+          cd susfs
+
+          git fetch --depth=1 origin "$SUSFS_REF"
+
+          git checkout --detach "$SUSFS_REF"
+
+          cd ..
 
           echo
           echo "========================================"
@@ -234,12 +214,7 @@ jobs:
           echo
           echo "===== BRANCH ====="
 
-          git -C susfs branch --show-current
-
-          echo
-          echo "===== TAG ====="
-
-          git -C susfs describe --tags --always || true
+          git -C susfs branch --show-current || true
 
           echo
           echo "========================================"
@@ -252,139 +227,77 @@ jobs:
 
 
       # =========================================================
-      # APPLY SUSFS
+      # VERIFY KSU + SUSFS PAIR
       # =========================================================
 
-      - name: Apply SUSFS
+      - name: Verify KernelSU SUSFS pair
         shell: bash
         run: |
           set -euo pipefail
 
           echo "========================================"
-          echo "PREPARING SUSFS PATCH"
+          echo "VERIFYING KSU + SUSFS"
           echo "========================================"
 
-          echo
-          echo "===== AVAILABLE KSU PATCHES ====="
+          KSU_COMMIT="$(git -C KernelSU rev-parse HEAD)"
+          KSU_TAG="$(git -C KernelSU describe --tags --exact-match 2>/dev/null || true)"
 
-          find susfs/kernel_patches/KernelSU \
-            -type f \
-            -name '*.patch' \
-            | sort
+          SUSFS_COMMIT="$(git -C susfs rev-parse HEAD)"
 
           echo
-          echo "===== AVAILABLE KERNEL PATCHES ====="
+          echo "KernelSU:"
+          echo "  Tag    : ${KSU_TAG:-unknown}"
+          echo "  Commit : $KSU_COMMIT"
 
-          find susfs/kernel_patches \
-            -type f \
-            -name '*.patch' \
-            | sort
-
-          # -----------------------------------------------------
-          # Locate KernelSU SUSFS patch
-          # -----------------------------------------------------
-
-          PATCH_KSU="$(
-            find susfs/kernel_patches/KernelSU \
-              -type f \
-              -name '10_enable_susfs_for_ksu.patch' \
-              | sort \
-              | head -n 1
-          )"
-
-          # Fallback if filename changes in future SUSFS branch.
-          if [ -z "$PATCH_KSU" ]; then
-            PATCH_KSU="$(
-              find susfs/kernel_patches/KernelSU \
-                -type f \
-                -iname '*enable*susfs*.patch' \
-                | sort \
-                | head -n 1
-            )"
-          fi
-
-          # -----------------------------------------------------
-          # Locate 5.10 kernel patch
-          # -----------------------------------------------------
-
-          PATCH_KERNEL="$(
-            find susfs/kernel_patches \
-              -type f \
-              -name '*5.10*.patch' \
-              | sort \
-              | head -n 1
-          )"
+          echo
+          echo "SUSFS:"
+          echo "  Commit : $SUSFS_COMMIT"
 
           echo
           echo "========================================"
-          echo "SELECTED PATCHES"
+          echo "CHECKING REQUIRED PATCHES"
           echo "========================================"
 
-          echo
-          echo "KernelSU patch:"
-          echo "${PATCH_KSU:-NOT FOUND}"
+          test -f \
+            susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+
+          test -f \
+            susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch
 
           echo
-          echo "Kernel patch:"
-          echo "${PATCH_KERNEL:-NOT FOUND}"
-
-          # -----------------------------------------------------
-          # Validate patches exist
-          # -----------------------------------------------------
-
-          if [ -z "$PATCH_KSU" ]; then
-            echo
-            echo "ERROR: KernelSU SUSFS patch not found."
-            echo
-            echo "Available KernelSU patches:"
-            find susfs/kernel_patches/KernelSU \
-              -type f \
-              | sort
-            exit 1
-          fi
-
-          if [ -z "$PATCH_KERNEL" ]; then
-            echo
-            echo "ERROR: SUSFS 5.10 kernel patch not found."
-            echo
-            echo "Available patches:"
-            find susfs/kernel_patches \
-              -type f \
-              | sort
-            exit 1
-          fi
-
-          test -f "$PATCH_KSU"
-          test -f "$PATCH_KERNEL"
-
-          # -----------------------------------------------------
-          # Show patch headers
-          # -----------------------------------------------------
+          echo "Required SUSFS patches found."
 
           echo
           echo "========================================"
-          echo "KERNELSU PATCH HEADER"
+          echo "PATCH TARGETS"
           echo "========================================"
 
-          sed -n '1,80p' "$PATCH_KSU"
+          grep '^diff --git' \
+            susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch \
+            | head -50
 
           echo
-          echo "========================================"
-          echo "KERNEL PATCH HEADER"
-          echo "========================================"
+          grep '^diff --git' \
+            susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch \
+            | head -50
 
-          sed -n '1,80p' "$PATCH_KERNEL"
 
-          # -----------------------------------------------------
-          # Copy SUSFS source files
-          # -----------------------------------------------------
+      # =========================================================
+      # COPY SUSFS FILES
+      # =========================================================
 
-          echo
+      - name: Copy SUSFS sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
           echo "========================================"
           echo "COPYING SUSFS SOURCE FILES"
           echo "========================================"
 
-          cp "$PATCH_KSU" KernelSU/
+          cp \
+            susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch \
+            KernelSU/
 
           cp -fv \
             susfs/kernel_patches/fs/* \
@@ -394,74 +307,106 @@ jobs:
             susfs/kernel_patches/include/linux/* \
             include/linux/
 
-          # -----------------------------------------------------
-          # Test KernelSU patch BEFORE applying
-          # -----------------------------------------------------
 
-          echo
+      # =========================================================
+      # TEST KERNELSU PATCH
+      # =========================================================
+
+      - name: Test KernelSU SUSFS patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
           echo "========================================"
-          echo "TESTING KERNELSU PATCH"
+          echo "TESTING KERNELSU SUSFS PATCH"
           echo "========================================"
 
           cd KernelSU
 
           patch \
+            --batch \
             --dry-run \
             -p1 \
-            < "$(basename "$PATCH_KSU")"
-
-          echo
-          echo "KernelSU dry-run PASSED."
-
-          # -----------------------------------------------------
-          # Apply KernelSU patch
-          # -----------------------------------------------------
-
-          echo
-          echo "========================================"
-          echo "APPLYING KERNELSU PATCH"
-          echo "========================================"
-
-          patch \
-            -p1 \
-            < "$(basename "$PATCH_KSU")"
+            < 10_enable_susfs_for_ksu.patch
 
           cd ..
 
-          # -----------------------------------------------------
-          # Test kernel SUSFS patch
-          # -----------------------------------------------------
+          echo
+          echo "KernelSU SUSFS dry-run PASSED."
+
+
+      # =========================================================
+      # APPLY KERNELSU PATCH
+      # =========================================================
+
+      - name: Apply KernelSU SUSFS patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "APPLYING KERNELSU SUSFS PATCH"
+          echo "========================================"
+
+          cd KernelSU
+
+          patch \
+            --batch \
+            -p1 \
+            < 10_enable_susfs_for_ksu.patch
+
+          cd ..
 
           echo
+          echo "KernelSU SUSFS patch applied."
+
+
+      # =========================================================
+      # TEST KERNEL SUSFS PATCH
+      # =========================================================
+
+      - name: Test kernel SUSFS patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
           echo "========================================"
           echo "TESTING KERNEL SUSFS PATCH"
           echo "========================================"
 
+          test -f \
+            susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch
+
           patch \
+            --batch \
             --dry-run \
             -p1 \
-            < "$PATCH_KERNEL"
+            < susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch
 
           echo
           echo "Kernel SUSFS dry-run PASSED."
 
-          # -----------------------------------------------------
-          # Apply kernel SUSFS patch
-          # -----------------------------------------------------
 
-          echo
+      # =========================================================
+      # APPLY KERNEL SUSFS PATCH
+      # =========================================================
+
+      - name: Apply kernel SUSFS patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
           echo "========================================"
           echo "APPLYING KERNEL SUSFS PATCH"
           echo "========================================"
 
           patch \
+            --batch \
             -p1 \
-            < "$PATCH_KERNEL"
+            < susfs/kernel_patches/50_add_susfs_in_kernel-5.10.patch
 
           echo
-          echo "========================================"
-          echo "SUSFS PATCHING COMPLETED"
-          echo "========================================"
+          echo "Kernel SUSFS patch applied."
 
 
       # =========================================================
@@ -480,7 +425,7 @@ jobs:
           echo "========================================"
 
           # -----------------------------------------------------
-          # Wi-Fi framework
+          # Wi-Fi
           # -----------------------------------------------------
 
           scripts/config --enable WIRELESS
@@ -507,11 +452,12 @@ jobs:
           scripts/config --enable LTO
           scripts/config --enable LTO_CLANG
           scripts/config --enable LTO_CLANG_THIN
+
           scripts/config --disable LTO_CLANG_FULL
           scripts/config --disable LTO_NONE
 
           # -----------------------------------------------------
-          # Generate final configuration
+          # Generate config
           # -----------------------------------------------------
 
           make \
@@ -531,7 +477,7 @@ jobs:
 
           echo
           echo "========================================"
-          echo "VERIFY REQUIRED CONFIG"
+          echo "VERIFY CONFIG"
           echo "========================================"
 
           test "$(scripts/config --state WIRELESS)" = "y"
@@ -547,15 +493,12 @@ jobs:
           test "$(scripts/config --state LTO_CLANG_THIN)" = "y"
 
           if [ "$(scripts/config --state LTO_CLANG_FULL)" = "y" ]; then
-            echo
-            echo "ERROR: FULL LTO IS ENABLED"
+            echo "ERROR: Full LTO is enabled."
             exit 1
           fi
 
           echo
-          echo "========================================"
-          echo "CONFIG CHECK PASSED"
-          echo "========================================"
+          echo "CONFIG CHECK PASSED."
 
 
       # =========================================================
@@ -570,7 +513,7 @@ jobs:
           export PATH="/usr/lib/llvm-22/bin:$PATH"
 
           echo "========================================"
-          echo "BUILDING TEMPLAR KERNEL"
+          echo "BUILDING TEMPLAR"
           echo "========================================"
 
           echo
@@ -583,9 +526,7 @@ jobs:
           ld.lld --version
 
           echo
-          echo "========================================"
-          echo "MAKE"
-          echo "========================================"
+          echo "===== BUILD ====="
 
           make \
             ARCH=arm64 \
@@ -604,7 +545,7 @@ jobs:
 
 
       # =========================================================
-      # VERIFY KERNEL
+      # VERIFY IMAGE
       # =========================================================
 
       - name: Verify kernel
@@ -629,7 +570,7 @@ jobs:
           ls -lh arch/arm64/boot/Image
 
           echo
-          echo "===== KERNEL VERSION ====="
+          echo "===== VERSION ====="
 
           strings arch/arm64/boot/Image \
             | grep -m1 \
@@ -637,9 +578,7 @@ jobs:
             || true
 
           echo
-          echo "========================================"
-          echo "KERNEL IMAGE VERIFIED"
-          echo "========================================"
+          echo "KERNEL IMAGE VERIFIED."
 
 
       # =========================================================
